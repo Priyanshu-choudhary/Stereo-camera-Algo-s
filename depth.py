@@ -132,16 +132,16 @@ def compute_disparity(rect_left, rect_right):
         method = "CUDA StereoBM"
     else:
         stereo = cv2.StereoSGBM_create(
-    minDisparity=0,
-    numDisparities=128,  # must be divisible by 16
-    blockSize=9,
-    P1=8*3*9**2,
-    P2=32*3*9**2,
-    disp12MaxDiff=1,
-    uniquenessRatio=10,
-    speckleWindowSize=100,
-    speckleRange=2,
-    preFilterCap=63,
+            minDisparity=0,
+            numDisparities=128,  # must be divisible by 16
+            blockSize=9,
+            P1=8*3*9**2,
+            P2=32*3*9**2,
+            disp12MaxDiff=1,
+            uniquenessRatio=10,
+            speckleWindowSize=100,
+            speckleRange=2,
+            preFilterCap=63,
             mode=cv2.STEREO_SGBM_MODE_HH 
         )
         disparity = stereo.compute(gray_left, gray_right).astype(np.float32) / 16.0

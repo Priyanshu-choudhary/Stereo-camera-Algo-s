@@ -3,4 +3,8 @@
 *.jpg
 *.PNG
 *.JPG
-
+*.npz
+*.npy
+*.yml
+calibrationImages/
+calibration_data/
