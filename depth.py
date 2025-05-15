@@ -279,6 +279,13 @@ if __name__ == "__main__":
     grid_image = np.vstack((top_row, bottom_row))
 
     # Show the combined image
-    cv2.imshow("Stereo 2x2 Grid View", grid_image)
+     # Save result
+    out_path = "./output/disparity.png"
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    cv2.imwrite(out_path, grid_image)
+    print(f"✅ Saved disparity map to: {out_path}")
+    
+    # Optional: show result
+    cv2.imshow("Disparity Map", grid_image)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
