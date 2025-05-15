@@ -8,8 +8,8 @@ CALIB_DATA_DIR = "./calibration_data"
 LEFT_IMG_PATH = "./calibrationImages/test/imageLeft0.png"
 RIGHT_IMG_PATH = "./calibrationImages/test/imageRight0.png"
 DISPARITY_RANGE = 128  # Trade-off: Higher=better range but slower
-BLOCK_SIZE = 5        # Odd number between 3-15
-scale_factor = 0.4  # 50% of original size
+BLOCK_SIZE = 9      # Odd number between 3-15 (Higher=increser false dection but getting smother)
+scale_factor = 0.45  # 50% of original size
 
 # ====== Load Calibration Data ======
 def load_calibration():
@@ -133,8 +133,8 @@ def compute_disparity(rect_left, rect_right):
     else:
         stereo = cv2.StereoSGBM_create(
             minDisparity=0,
-            numDisparities=128,  # must be divisible by 16
-            blockSize=9,
+            numDisparities=DISPARITY_RANGE,  # must be divisible by 16
+            blockSize=BLOCK_SIZE,
             P1=8*3*9**2,
             P2=32*3*9**2,
             disp12MaxDiff=1,
@@ -142,7 +142,11 @@ def compute_disparity(rect_left, rect_right):
             speckleWindowSize=100,
             speckleRange=2,
             preFilterCap=63,
-            mode=cv2.STEREO_SGBM_MODE_HH 
+#             mode=cv2.STEREO_SGBM_MODE_SGBM       #7.1sec
+             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY  #1.5sec ------------->best for quality and time
+#             mode=cv2.STEREO_SGBM_MODE_HH4        #2.3sec
+#             mode=cv2.STEREO_SGBM_MODE_HH         #11sec 
+            
         )
         disparity = stereo.compute(gray_left, gray_right).astype(np.float32) / 16.0
         method = "CPU SGBM"
@@ -155,7 +159,74 @@ def compute_disparity(rect_left, rect_right):
     print(f"• Disparity range: {DISPARITY_RANGE} | Block size: {BLOCK_SIZE}")
     return disparity, disparity_vis
 
+def compute_disparity_with_WLS(rect_left, rect_right):
+    print("\n=== 🎭 Computing Disparity ===")
+    start = time.time()
 
+    gray_left = cv2.cvtColor(rect_left, cv2.COLOR_BGR2GRAY)
+    gray_right = cv2.cvtColor(rect_right, cv2.COLOR_BGR2GRAY)
+
+    # Use GPU if available AND StereoBM is available
+    use_cuda = cv2.cuda.getCudaEnabledDeviceCount() > 0 and hasattr(cv2.cuda, "StereoBM_create")
+
+    if use_cuda:
+        stereo = cv2.cuda.StereoBM_create(
+            numDisparities=DISPARITY_RANGE, 
+            blockSize=BLOCK_SIZE
+        )
+        disparity = stereo.compute(
+            cv2.cuda_GpuMat(gray_left), 
+            cv2.cuda_GpuMat(gray_right)
+        ).download()
+        method = "CUDA StereoBM"
+    else:
+        # Left matcher
+        left_matcher = cv2.StereoSGBM_create(
+            minDisparity=0,
+            numDisparities=128,
+            blockSize=9,
+            P1=8*3*9**2,
+            P2=32*3*9**2,
+            disp12MaxDiff=1,
+            uniquenessRatio=10,
+            speckleWindowSize=100,
+            speckleRange=2,
+            preFilterCap=63,
+            mode=cv2.STEREO_SGBM_MODE_HH #23 sec
+#             mode=cv2.STEREO_SGBM_MODE_4HH #4.5 sec
+#             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY  #3.3sec
+#             mode=cv2.STEREO_SGBM_MODE_SGBM       #14.4sec
+            
+        )
+        
+        # Compute left disparity
+        left_disp = left_matcher.compute(gray_left, gray_right).astype(np.float32) / 16.0
+        
+        # Right matcher for WLS filter
+        right_matcher = cv2.ximgproc.createRightMatcher(left_matcher)
+        right_disp = right_matcher.compute(gray_right, gray_left).astype(np.float32) / 16.0
+        
+        # WLS filter parameters
+        lambda_wls = 8000
+        sigma_wls = 1.5
+        
+        # Create WLS filter
+        wls_filter = cv2.ximgproc.createDisparityWLSFilter(left_matcher)
+        wls_filter.setLambda(lambda_wls)
+        wls_filter.setSigmaColor(sigma_wls)
+        
+        # Apply WLS filter
+        disparity = wls_filter.filter(left_disp, gray_left, disparity_map_right=right_disp)
+        
+        method = "CPU SGBM with WLS filter"
+
+    # Normalize for visualization
+    disparity_vis = cv2.normalize(disparity, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+
+    disp_time = time.time() - start
+    print(f"• Computed via {method} in {disp_time*1000:.2f}ms")
+    print(f"• Disparity range: {DISPARITY_RANGE} | Block size: {BLOCK_SIZE}")
+    return disparity, disparity_vis
 def resize_image(img, scale=0.5):
     return cv2.resize(img, (0, 0), fx=scale, fy=scale)
 # ====== Main Pipeline ======
@@ -183,7 +254,9 @@ if __name__ == "__main__":
     filtered_left = cv2.bilateralFilter(rect_left, d=9, sigmaColor=75, sigmaSpace=75)
     
     
+#     disparity, disparity_vis = compute_disparity_with_WLS(filtered_left, filtered_right)
     disparity, disparity_vis = compute_disparity(filtered_left, filtered_right)
+
     disparity_heatmap = cv2.applyColorMap(disparity_vis, cv2.COLORMAP_JET)
     
     # resize
