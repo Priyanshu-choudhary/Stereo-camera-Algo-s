@@ -1,0 +1,6 @@
+# Ignore all PNG and JPG images
+*.png
+*.jpg
+*.PNG
+*.JPG
+

@@ -1,0 +1,195 @@
+import cv2
+import numpy as np
+import os
+import glob
+import argparse
+from datetime import datetime
+
+def print_divider(title=None):
+    """Print a formatted divider with optional title"""
+    width = 80
+    if title:
+        print(f"\n{'=' * width}")
+        print(f"{title.upper():^{width}}")
+        print(f"{'=' * width}")
+    else:
+        print(f"\n{'=' * width}")
+
+def load_rectified_pair(base_path):
+    """Load rectified image pair and metadata"""
+    print_divider("LOADING RECTIFIED IMAGES")
+    try:
+        # Find the most recent pair if no specific base_path provided
+        if base_path is None:
+            left_images = sorted(glob.glob(os.path.join(RECTIFIED_IMAGES_DIR, "rect*_left.png")))
+            if not left_images:
+                raise FileNotFoundError("No rectified images found")
+            base_path = os.path.splitext(left_images[-1].replace("_left", ""))[0]
+            print(f"Using most recent pair: {os.path.basename(base_path)}")
+
+        left_img_path = f"{base_path}_left.png"
+        right_img_path = f"{base_path}_right.png"
+        metadata_path = f"{base_path}_metadata.npz"
+
+        # Verify files exist
+        for path in [left_img_path, right_img_path, metadata_path]:
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"File not found: {path}")
+
+        # Load images
+        left_img = cv2.imread(left_img_path, cv2.IMREAD_COLOR)
+        right_img = cv2.imread(right_img_path, cv2.IMREAD_COLOR)
+        if left_img is None or right_img is None:
+            raise IOError("Failed to load one or both images")
+
+        # Load metadata
+        metadata = np.load(metadata_path)
+        Q = metadata['Q']
+        baseline = metadata['baseline_cm']
+
+        print(f"✔ Successfully loaded:")
+        print(f"• Left: {os.path.basename(left_img_path)} ({left_img.shape})")
+        print(f"• Right: {os.path.basename(right_img_path)} ({right_img.shape})")
+        print(f"• Baseline: {baseline:.2f} cm")
+
+        return left_img, right_img, Q
+
+    except Exception as e:
+        print(f"❌ Error loading rectified pair: {str(e)}")
+        raise
+
+def create_disparity_map(left_img, right_img, show_params=False):
+    """Compute disparity map using StereoSGBM"""
+    print_divider("COMPUTING DISPARITY")
+    
+    # Convert to grayscale
+    gray_left = cv2.cvtColor(left_img, cv2.COLOR_BGR2GRAY)
+    gray_right = cv2.cvtColor(right_img, cv2.COLOR_BGR2GRAY)
+
+    # SGBM Parameters (tuned for typical rectified images)
+    window_size = 5
+    min_disp = 0
+    num_disp = 16 * 10  # Must be divisible by 16
+    
+    stereo = cv2.StereoSGBM_create(
+        minDisparity=min_disp,
+        numDisparities=num_disp,
+        blockSize=window_size,
+        P1=8 * 3 * window_size**2,
+        P2=32 * 3 * window_size**2,
+        disp12MaxDiff=1,
+        uniquenessRatio=10,
+        speckleWindowSize=100,
+        speckleRange=32,
+        mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY
+    )
+
+    if show_params:
+        print("SGBM Parameters:")
+        print(f"• Min Disparity: {min_disp}")
+        print(f"• Num Disparities: {num_disp}")
+        print(f"• Block Size: {window_size}")
+        print(f"• P1: {8 * 3 * window_size**2}")
+        print(f"• P2: {32 * 3 * window_size**2}")
+
+    print("Computing disparity...")
+    disparity = stereo.compute(gray_left, gray_right).astype(np.float32) / 16.0
+
+    # Post-processing
+    disparity = cv2.medianBlur(disparity, 5)  # Remove noise
+    disparity_normalized = cv2.normalize(
+        disparity, None, alpha=0, beta=255,
+        norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U
+    )
+    disparity_colored = cv2.applyColorMap(disparity_normalized, cv2.COLORMAP_JET)
+
+    print("✔ Disparity computation complete")
+    return disparity, disparity_normalized, disparity_colored
+
+def visualize_results(left_img, right_img, disparity, disparity_colored):
+    """Display the results in a formatted window"""
+    print_divider("VISUALIZING RESULTS")
+    
+    # Resize for display (maintaining aspect ratio)
+    display_width = 800
+    aspect_ratio = left_img.shape[1] / left_img.shape[0]
+    display_height = int(display_width / aspect_ratio)
+    
+    # Resize all images
+    left_display = cv2.resize(left_img, (display_width, display_height))
+    right_display = cv2.resize(right_img, (display_width, display_height))
+    disp_display = cv2.resize(disparity_colored, (display_width, display_height))
+    
+    # Create composite image
+    top_row = np.hstack((left_display, right_display))
+    bottom_row = np.hstack((disp_display, np.zeros_like(disp_display)))
+    composite = np.vstack((top_row, bottom_row))
+    
+    # Add titles
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    cv2.putText(composite, "Left Rectified", (10, 30), font, 0.7, (255,255,255), 2)
+    cv2.putText(composite, "Right Rectified", (display_width+10, 30), font, 0.7, (255,255,255), 2)
+    cv2.putText(composite, "Disparity Map", (10, display_height+30), font, 0.7, (255,255,255), 2)
+    
+    # Show the result
+    cv2.imshow("Stereo Disparity Results", composite)
+    print("Displaying results (press any key to exit)...")
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+def save_results(disparity, disparity_colored, base_path):
+    """Save disparity maps to files"""
+    output_dir = os.path.join(os.path.dirname(base_path), "disparity_results")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    base_name = os.path.basename(base_path)
+    raw_path = os.path.join(output_dir, f"{base_name}_disparity_raw.tiff")
+    color_path = os.path.join(output_dir, f"{base_name}_disparity_color.png")
+    
+    # Save 32-bit float disparity (for depth calculations)
+    cv2.imwrite(raw_path, disparity)
+    # Save 8-bit color disparity (for visualization)
+    cv2.imwrite(color_path, disparity_colored)
+    
+    print(f"✔ Saved results to:")
+    print(f"• Raw disparity: {raw_path}")
+    print(f"• Color disparity: {color_path}")
+
+# ====== Main ======
+if __name__ == "__main__":
+    # Configuration
+    RECTIFIED_IMAGES_DIR = "/home/jetson/camera/Depth_estimation/calibrationImages/rectified_images"
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Compute stereo disparity from rectified images')
+    parser.add_argument('--pair', type=str, help='Base path of image pair (without _left/_right suffix)')
+    parser.add_argument('--show_params', action='store_true', help='Show SGBM parameters')
+    args = parser.parse_args()
+
+    try:
+        print_divider("STEREO DISPARITY COMPUTATION")
+        
+        # Load images
+        left_img, right_img, Q = load_rectified_pair(args.pair)
+        
+        # Compute disparity
+        disparity, disparity_normalized, disparity_colored = create_disparity_map(
+            left_img, right_img, args.show_params
+        )
+        
+        # Visualize
+        visualize_results(left_img, right_img, disparity_normalized, disparity_colored)
+        
+        # Save results
+        base_path = args.pair if args.pair else sorted(
+            glob.glob(os.path.join(RECTIFIED_IMAGES_DIR, "rect*_left.png"))
+        )[-1].replace("_left.png", "")
+        save_results(disparity, disparity_colored, base_path)
+        
+        print_divider("PROCESSING COMPLETE")
+    
+    except Exception as e:
+        print_divider("ERROR")
+        print(f"❌ Processing failed: {str(e)}")
+        print(f"Error type: {type(e).__name__}")
+        sys.exit(1)
