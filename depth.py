@@ -143,9 +143,9 @@ def compute_disparity(rect_left, rect_right):
             speckleRange=2,
             preFilterCap=63,
 #             mode=cv2.STEREO_SGBM_MODE_SGBM       #7.1sec
-             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY  #1.5sec ------------->best for quality and time
+              mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY  #1.5sec ------------->best for quality and time
 #             mode=cv2.STEREO_SGBM_MODE_HH4        #2.3sec
-#             mode=cv2.STEREO_SGBM_MODE_HH         #11sec 
+#            mode=cv2.STEREO_SGBM_MODE_HH         #11sec 
             
         )
         disparity = stereo.compute(gray_left, gray_right).astype(np.float32) / 16.0
